@@ -67,9 +67,9 @@ function Invoke-AddService {
         Show-InfoMessage "--- Add New Traefik Service Configuration ---"
 
         # Get validated inputs
-        $serviceIP = Get-ValidatedInput -Prompt "Enter the internal IP of the service LXC/VM (e.g., 10.10.10.30)" -ValidationFunction { param($ip) Test-IPAddress $ip } -ErrorMessage "Invalid IP address format"
+        $serviceIP = Get-ValidatedInput -Prompt "Enter the internal IP of the service LXC/VM (e.g., 192.168.1.100)" -ValidationFunction { param($ip) Test-IPAddress $ip } -ErrorMessage "Invalid IP address format"
 
-        $serviceName = Get-ValidatedInput -Prompt "Enter a short, unique name for your service (e.g., jelly, nextcloud)" -ValidationFunction { param($name) Test-ServiceName $name } -ErrorMessage "Invalid service name format"
+        $serviceName = Get-ValidatedInput -Prompt "Enter a short, unique name for your service (e.g., nextcloud, jellyfin)" -ValidationFunction { param($name) Test-ServiceName $name } -ErrorMessage "Invalid service name format"
 
         # Check if service already exists
         $password = Get-SshPassword -User $script:Config.TraefikSshUser -SshHost $script:Config.TraefikLxcIp
@@ -93,11 +93,8 @@ function Invoke-AddService {
         # Get HTTPS preference
         $useHttps = Get-YesNoInput -Prompt "Use HTTPS for the backend service URL?"
 
-        # Get CrowdSec bouncer preference
-        $useCrowdSecBouncer = Get-YesNoInput -Prompt "Enable CrowdSec bouncer middleware for this service?"
-
         # Generate configuration
-        $yamlContent = New-TraefikServiceYaml -ServiceName $serviceName -ServiceIP $serviceIP -ServicePort $servicePort -DomainName $domainName -UseHttps $useHttps -UseCrowdSecBouncer $useCrowdSecBouncer
+        $yamlContent = New-TraefikServiceYaml -ServiceName $serviceName -ServiceIP $serviceIP -ServicePort $servicePort -DomainName $domainName -UseHttps $useHttps
 
         # Show preview
         Show-ConfigurationPreview -ServiceName $serviceName -YamlContent $yamlContent

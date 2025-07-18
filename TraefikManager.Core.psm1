@@ -81,10 +81,28 @@ function Get-TraefikConfiguration {
             
             # Validate required properties
             $requiredProperties = @('TraefikLxcIp', 'TraefikSshUser', 'RemoteConfigDir')
+            $missingProperties = @()
+            
             foreach ($prop in $requiredProperties) {
                 if (-not $config.PSObject.Properties.Name.Contains($prop)) {
-                    throw "Missing required configuration property: $prop"
+                    $missingProperties += $prop
                 }
+            }
+            
+            if ($missingProperties.Count -gt 0) {
+                Write-TraefikLog "Configuration file is missing required properties: $($missingProperties -join ', ')" -Level "Warning"
+                Write-Host "Configuration file exists but is incomplete or outdated." -ForegroundColor Yellow
+                $recreate = Get-YesNoInput -Prompt "Would you like to run the configuration wizard again?" -DefaultToNo $false
+                
+                if ($recreate) {
+                    $newConfig = Initialize-TraefikConfiguration -ConfigPath $ConfigPath
+                    if ($newConfig) {
+                        $script:ModuleConfig = $newConfig
+                        return $newConfig
+                    }
+                }
+                
+                throw "Configuration file is incomplete and user declined to recreate it."
             }
             
             Write-TraefikLog "Configuration loaded successfully from: $ConfigPath" -Level "Success"
@@ -93,42 +111,32 @@ function Get-TraefikConfiguration {
         }
         catch {
             Write-TraefikLog "Error reading config file: $($_.Exception.Message)" -Level "Error"
-            Write-TraefikLog "Creating new default config file..." -Level "Warning"
+            Write-Host "Error reading configuration file: $($_.Exception.Message)" -ForegroundColor Red
+            
+            $recreate = Get-YesNoInput -Prompt "Would you like to run the configuration wizard to create a new configuration?" -DefaultToNo $false
+            
+            if ($recreate) {
+                $newConfig = Initialize-TraefikConfiguration -ConfigPath $ConfigPath
+                if ($newConfig) {
+                    $script:ModuleConfig = $newConfig
+                    return $newConfig
+                }
+            }
+            
+            throw "Failed to load or create configuration."
         }
     }
     
-    # Create default config
-    $defaultConfig = [PSCustomObject]@{
-        TraefikLxcIp = "10.10.1.3"
-        TraefikSshUser = "root"
-        RemoteConfigDir = "/etc/traefik/conf.d"
-        DomainOptions = [PSCustomObject]@{
-            "1" = "coulter.app"
-            "2" = "coulter-local.app"
-        }
-        ConnectionSettings = [PSCustomObject]@{
-            MaxRetries = 3
-            RetryDelaySeconds = 2
-            TimeoutSeconds = 30
-            SSHPort = 22
-        }
-        LogLevel = "Info"
-        Editor = "notepad.exe"
-        BackupEnabled = $true
-        BackupDirectory = "backups"
+    # No config file exists - run initialization wizard
+    Write-Host "No configuration file found. Running the setup wizard..." -ForegroundColor Yellow
+    $newConfig = Initialize-TraefikConfiguration -ConfigPath $ConfigPath
+    
+    if (-not $newConfig) {
+        throw "Configuration setup was cancelled or failed."
     }
     
-    try {
-        $defaultConfig | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -ErrorAction Stop
-        Write-TraefikLog "Created default configuration file at: $ConfigPath" -Level "Success"
-    }
-    catch {
-        Write-TraefikLog "Failed to create config file: $($_.Exception.Message)" -Level "Error"
-        throw
-    }
-    
-    $script:ModuleConfig = $defaultConfig
-    return $defaultConfig
+    $script:ModuleConfig = $newConfig
+    return $newConfig
 }
 
 # --- Input Validation Functions ---
@@ -223,6 +231,27 @@ function Get-ValidatedInput {
             throw "Input validation failed after $MaxAttempts attempts"
         }
     } while ($attempts -lt $MaxAttempts)
+}
+
+function Get-YesNoInput {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Prompt,
+        
+        [Parameter(Mandatory = $false)]
+        [bool]$DefaultToNo = $true
+    )
+
+    $defaultText = if ($DefaultToNo) { "(y/N)" } else { "(Y/n)" }
+    $input = Read-Host -Prompt "$Prompt $defaultText"
+    
+    if ($DefaultToNo) {
+        return ($input -eq 'y' -or $input -eq 'Y')
+    }
+    else {
+        return ($input -ne 'n' -and $input -ne 'N')
+    }
 }
 
 # --- SSH Password Management ---
@@ -334,8 +363,9 @@ function Remove-TraefikTemporaryFiles {
         $tempFiles = @()
         
         try {
-            $tempFiles += Get-ChildItem -Path $tempPath -Filter "*_traefik_config.yml" -ErrorAction SilentlyContinue
+            $tempFiles += Get-ChildItem -Path $tempPath -Filter "*_traefik_config*.yml" -ErrorAction SilentlyContinue
             $tempFiles += Get-ChildItem -Path $tempPath -Filter "edit_*.yml" -ErrorAction SilentlyContinue
+            $tempFiles += Get-ChildItem -Path $tempPath -Filter "temp_ssh_cred_*.xml" -ErrorAction SilentlyContinue
         }
         catch {
             # Ignore errors finding temp files
@@ -363,6 +393,7 @@ Export-ModuleMember -Function @(
     'Test-ServiceName', 
     'Test-PortNumber',
     'Get-ValidatedInput',
+    'Get-YesNoInput',
     'Get-SshPassword',
     'Clear-TraefikSensitiveData',
     'Remove-TraefikTemporaryFiles'

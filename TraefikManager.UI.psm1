@@ -12,8 +12,9 @@ function Show-MainMenu {
     Write-Host "3. Remove Service" -ForegroundColor Yellow
     Write-Host "4. View Service Content" -ForegroundColor Yellow
     Write-Host "5. Edit Service Content" -ForegroundColor Yellow
-    Write-Host "6. Show Configuration" -ForegroundColor Yellow
-    Write-Host "7. Test Connection" -ForegroundColor Yellow
+    Write-Host "6. Restore from Backup" -ForegroundColor Yellow
+    Write-Host "7. Show Configuration" -ForegroundColor Yellow
+    Write-Host "8. Test Connection" -ForegroundColor Yellow
     Write-Host "q. Quit" -ForegroundColor Red
     Write-Host "===============================`n" -ForegroundColor Green
 }
@@ -128,6 +129,94 @@ function Show-ConnectionTest {
         Write-Host "Connection test failed!" -ForegroundColor Red
         Write-Host "Error: $($ConnectionResult.Message)" -ForegroundColor Red
     }
+}
+
+# --- Backup UI Functions ---
+function Show-BackupList {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$Backups,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$Title = "Available Backups"
+    )
+
+    Write-Host "`n--- $Title ---" -ForegroundColor Yellow
+
+    if ($Backups.Count -eq 0) {
+        Write-Host "No backups found." -ForegroundColor Yellow
+        return @()
+    }
+
+    Write-Host "Found $($Backups.Count) backup files:" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  #  | Service Name     | Type         | Backup Date         | Size (KB)" -ForegroundColor Cyan
+    Write-Host "  ---|------------------|--------------|---------------------|----------" -ForegroundColor Cyan
+
+    $i = 1
+    foreach ($backup in $Backups) {
+        $serviceNamePadded = $backup.ServiceName.PadRight(16)
+        $typePadded = $backup.BackupType.PadRight(12)
+        $sizePadded = $backup.SizeKB.ToString().PadLeft(8)
+        Write-Host "  $($i.ToString().PadLeft(2)) | $serviceNamePadded | $typePadded | $($backup.FormattedDate) | $sizePadded" -ForegroundColor White
+        $i++
+    }
+
+    Write-Host ""
+    return $Backups
+}
+
+function Get-BackupSelection {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Prompt,
+        
+        [Parameter(Mandatory = $true)]
+        [array]$Backups
+    )
+
+    $choice = Read-Host -Prompt $Prompt
+    if ($choice -eq 'q') {
+        return $null
+    }
+
+    if ($choice -match "^\d+$") {
+        $choiceInt = [int]$choice
+        if ($choiceInt -ge 1 -and $choiceInt -le $Backups.Count) {
+            return $Backups[$choiceInt - 1]
+        }
+        else {
+            Write-Warning "Invalid selection. Please enter a number between 1 and $($Backups.Count)."
+            return "INVALID"
+        }
+    }
+    else {
+        Write-Warning "Invalid input. Please enter a number or 'q'."
+        return "INVALID"
+    }
+}
+
+function Show-BackupDetails {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Backup,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    Write-Host "`n--- Backup Details ---" -ForegroundColor Green
+    Write-Host "Service Name: $($Backup.ServiceName)" -ForegroundColor Cyan
+    Write-Host "Backup Type: $($Backup.BackupType)" -ForegroundColor Cyan
+    Write-Host "Backup Date: $($Backup.FormattedDate)" -ForegroundColor Cyan
+    Write-Host "File: $($Backup.FileName)" -ForegroundColor Cyan
+    Write-Host "Size: $($Backup.SizeKB) KB" -ForegroundColor Cyan
+    Write-Host "`n--- Configuration Content ---" -ForegroundColor Green
+    Write-Host $Content -ForegroundColor White
+    Write-Host "----------------------------" -ForegroundColor Green
 }
 
 # --- Input Functions ---
@@ -331,6 +420,9 @@ Export-ModuleMember -Function @(
     'Show-Configuration',
     'Show-ServiceContent',
     'Show-ConnectionTest',
+    'Show-BackupList',
+    'Get-BackupSelection',
+    'Show-BackupDetails',
     'Get-ServiceSelection',
     'Get-DomainSelection',
     'Get-YesNoInput',

@@ -19,6 +19,7 @@ try {
         "TraefikManager.SSH.psm1", 
         "TraefikManager.Services.psm1",
         "TraefikManager.Config.psm1",
+        "TraefikManager.Backup.psm1",
         "TraefikManager.UI.psm1"
     )
     
@@ -154,7 +155,7 @@ function Invoke-RemoveService {
 
         # Create backup before removal
         if ($script:Config.BackupEnabled -and $content) {
-            Save-ServiceBackup -ServiceName $serviceName -Content $content
+            Save-ServiceBackup -ServiceName $serviceName -Content $content -BackupSuffix "pre_delete"
         }
 
         # Remove service
@@ -237,6 +238,83 @@ function Invoke-EditService {
     }
 }
 
+function Invoke-RestoreService {
+    try {
+        Write-TraefikLog "Starting restore service workflow..." -Level "Info"
+        Show-InfoMessage "--- Restore Service from Backup ---"
+        
+        # Get all available backups
+        $backups = @(Get-ServiceBackups)
+        
+        if ($backups.Count -eq 0) {
+            Show-WarningMessage "No backup files found in the backups directory."
+            Show-InfoMessage "Backups are automatically created when you edit or remove services."
+            Wait-ForContinue
+            return
+        }
+
+        # Show backup list
+        $backupList = Show-BackupList -Backups $backups -Title "Available Service Backups"
+        
+        # Get user selection
+        $selectedBackup = $null
+        do {
+            $selectedBackup = Get-BackupSelection -Prompt "Enter the number of the backup to restore, or 'q' to cancel" -Backups $backups
+            if ($selectedBackup -eq $null) {
+                Show-InfoMessage "Restore cancelled."
+                return
+            }
+            if ($selectedBackup -eq "INVALID") {
+                continue
+            }
+            break
+        } while ($true)
+
+        # Show backup content for review
+        $backupContent = Get-BackupContent -BackupFilePath $selectedBackup.FilePath
+        if (-not $backupContent) {
+            Show-ErrorMessage "Failed to read backup content"
+            Wait-ForContinue
+            return
+        }
+
+        Show-BackupDetails -Backup $selectedBackup -Content $backupContent
+
+        # Confirm restore
+        Write-Host "`nThis will restore the service '$($selectedBackup.ServiceName)' to the configuration shown above." -ForegroundColor Yellow
+        Write-Host "The current configuration (if any) will be backed up before restoring." -ForegroundColor Yellow
+        
+        $confirm = Get-YesNoInput -Prompt "Do you want to proceed with the restore?"
+        if (-not $confirm) {
+            Show-InfoMessage "Restore cancelled."
+            return
+        }
+
+        # Get SSH connection
+        $password = Get-SshPassword -User $script:Config.TraefikSshUser -SshHost $script:Config.TraefikLxcIp
+        if (-not $password) { return }
+
+        # Perform restore
+        Write-Host "Restoring service configuration..." -ForegroundColor Cyan
+        $success = Restore-ServiceFromBackup -BackupFilePath $selectedBackup.FilePath -ServiceName $selectedBackup.ServiceName -User $script:Config.TraefikSshUser -SshHost $script:Config.TraefikLxcIp -Password $password -RemoteConfigDir $script:Config.RemoteConfigDir -Port $script:Config.ConnectionSettings.SSHPort
+
+        # Show result
+        if ($success) {
+            Show-SuccessMessage "Service '$($selectedBackup.ServiceName)' has been successfully restored!"
+            Show-InfoMessage "Traefik will automatically detect the restored configuration."
+        } else {
+            Show-ErrorMessage "Failed to restore service '$($selectedBackup.ServiceName)'"
+        }
+        
+        Wait-ForContinue
+    }
+    catch {
+        Show-ErrorMessage "Error during restore operation" $_.Exception.Message
+        Write-TraefikLog "Error in Invoke-RestoreService: $($_.Exception.Message)" -Level "Error"
+        Wait-ForContinue
+    }
+}
+
 function Invoke-TestConnection {
     try {
         Write-TraefikLog "Starting connection test..." -Level "Info"
@@ -293,6 +371,11 @@ function Start-TraefikManager {
         # Load configuration
         $script:Config = Get-TraefikConfiguration -ConfigPath $configPath
         
+        # Clean up old backups on startup
+        if ($script:Config.BackupEnabled) {
+            Remove-OldBackups -DaysToKeep 30 -MaxBackupsPerService 10
+        }
+        
         # Main menu loop
         $exitRequested = $false
         while (-not $exitRequested) {
@@ -308,8 +391,9 @@ function Start-TraefikManager {
                     "3" { Invoke-RemoveService }
                     "4" { Invoke-ViewService }
                     "5" { Invoke-EditService }
-                    "6" { Invoke-ShowConfiguration }
-                    "7" { Invoke-TestConnection }
+                    "6" { Invoke-RestoreService }
+                    "7" { Invoke-ShowConfiguration }
+                    "8" { Invoke-TestConnection }
                     "q" { 
                         Write-TraefikLog "User requested to quit the application." -Level "Info"
                         $exitRequested = $true

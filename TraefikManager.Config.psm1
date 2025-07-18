@@ -160,34 +160,6 @@ function Deploy-ServiceConfig {
     }
 }
 
-function Save-ServiceBackup {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$ServiceName,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$Content
-    )
-
-    try {
-        $backupDir = Join-Path (Get-Location) "backups"
-        if (-not (Test-Path $backupDir)) {
-            New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-            Write-TraefikLog "Created backup directory: $backupDir" -Level "Info"
-        }
-
-        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $backupFile = Join-Path $backupDir "$ServiceName`_$timestamp.yml"
-
-        $Content | Set-Content -Path $backupFile -Encoding UTF8 -ErrorAction Stop
-        Write-TraefikLog "Created backup: $backupFile" -Level "Success"
-    }
-    catch {
-        Write-TraefikLog "Failed to create backup for $ServiceName`: $($_.Exception.Message)" -Level "Warning"
-    }
-}
-
 function Edit-ServiceConfig {
     [CmdletBinding()]
     param(
@@ -232,7 +204,7 @@ function Edit-ServiceConfig {
 
         # Create backup before editing
         if ($originalContent) {
-            Save-ServiceBackup -ServiceName $ServiceName -Content $originalContent
+            Save-ServiceBackup -ServiceName $ServiceName -Content $originalContent -BackupSuffix "pre_edit"
         }
 
         # Open in editor
@@ -348,7 +320,6 @@ function Test-BasicYamlSyntax {
 Export-ModuleMember -Function @(
     'New-TraefikServiceYaml',
     'Deploy-ServiceConfig',
-    'Save-ServiceBackup',
     'Edit-ServiceConfig',
     'Test-BasicYamlSyntax'
 )

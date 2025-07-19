@@ -65,8 +65,8 @@ function Get-ServiceBackups {
             $pattern = "$ServiceName`_*.yml"
             $backupFiles = @(Get-ChildItem -Path $backupDir -Filter $pattern -ErrorAction SilentlyContinue)
         } else {
-            # Get all backup files
-            $backupFiles = @(Get-ChildItem -Path $backupDir -Filter "*.yml" -ErrorAction SilentlyContinue)
+            # Get all service backup files (exclude static config backups)
+            $backupFiles = @(Get-ChildItem -Path $backupDir -Filter "*.yml" -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '^static_config_' })
         }
 
         $backups = @()
@@ -89,6 +89,7 @@ function Get-ServiceBackups {
                         BackupDate = $backupDate
                         FormattedDate = $backupDate.ToString("yyyy-MM-dd HH:mm:ss")
                         SizeKB = [Math]::Round($file.Length / 1KB, 2)
+                        ConfigType = "Service"
                     }
                 } catch {
                     Write-TraefikLog "Could not parse date from backup file: $($file.Name)" -Level "Warning"
@@ -99,12 +100,78 @@ function Get-ServiceBackups {
         # Sort by backup date (newest first)
         $backups = @($backups | Sort-Object BackupDate -Descending)
         
-        Write-TraefikLog "Found $($backups.Count) backup files" -Level "Info"
+        Write-TraefikLog "Found $($backups.Count) service backup files" -Level "Info"
         return $backups
     }
     catch {
-        Write-TraefikLog "Error retrieving backups: $($_.Exception.Message)" -Level "Error"
+        Write-TraefikLog "Error retrieving service backups: $($_.Exception.Message)" -Level "Error"
         return @()
+    }
+}
+
+function Get-StaticConfigBackups {
+    [CmdletBinding()]
+    param()
+
+    try {
+        $backupDir = Join-Path (Get-Location) "backups"
+        if (-not (Test-Path $backupDir)) {
+            Write-TraefikLog "No backup directory found." -Level "Warning"
+            return @()
+        }
+
+        # Get static config backup files
+        $backupFiles = @(Get-ChildItem -Path $backupDir -Filter "static_config_*.yaml" -ErrorAction SilentlyContinue)
+
+        $backups = @()
+        foreach ($file in $backupFiles) {
+            # Parse filename: static_config_[suffix_]yyyyMMdd_HHmmss.yaml
+            if ($file.Name -match '^static_config_(?:(.+?)_)?(\d{8})_(\d{6})\.yaml$') {
+                $suffix = if ($matches[1]) { $matches[1] } else { "manual" }
+                $dateStr = $matches[2]
+                $timeStr = $matches[3]
+                
+                try {
+                    $backupDate = [DateTime]::ParseExact("$dateStr$timeStr", "yyyyMMddHHmmss", $null)
+                    
+                    $backups += [PSCustomObject]@{
+                        BackupType = $suffix
+                        FileName = $file.Name
+                        FilePath = $file.FullName
+                        BackupDate = $backupDate
+                        FormattedDate = $backupDate.ToString("yyyy-MM-dd HH:mm:ss")
+                        SizeKB = [Math]::Round($file.Length / 1KB, 2)
+                        ConfigType = "Static"
+                    }
+                } catch {
+                    Write-TraefikLog "Could not parse date from static backup file: $($file.Name)" -Level "Warning"
+                }
+            }
+        }
+
+        # Sort by backup date (newest first)
+        $backups = @($backups | Sort-Object BackupDate -Descending)
+        
+        Write-TraefikLog "Found $($backups.Count) static config backup files" -Level "Info"
+        return $backups
+    }
+    catch {
+        Write-TraefikLog "Error retrieving static config backups: $($_.Exception.Message)" -Level "Error"
+        return @()
+    }
+}
+
+function Get-AllBackups {
+    [CmdletBinding()]
+    param()
+
+    $serviceBackups = @(Get-ServiceBackups)
+    $staticBackups = @(Get-StaticConfigBackups)
+    
+    return @{
+        ServiceBackups = $serviceBackups
+        StaticBackups = $staticBackups
+        TotalCount = $serviceBackups.Count + $staticBackups.Count
     }
 }
 
@@ -198,6 +265,65 @@ function Restore-ServiceFromBackup {
     }
 }
 
+function Restore-StaticConfigFromBackup {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BackupFilePath,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$User,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$SshHost,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Password,
+        
+        [Parameter(Mandatory = $false)]
+        [int]$Port = 22,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$RemoteConfigPath = "/etc/traefik/traefik.yaml",
+        
+        [Parameter(Mandatory = $false)]
+        [bool]$CreateBackupBeforeRestore = $true
+    )
+
+    try {
+        # Read backup content
+        $backupContent = Get-BackupContent -BackupFilePath $BackupFilePath
+        if (-not $backupContent) {
+            Write-TraefikLog "Failed to read static config backup content" -Level "Error"
+            return $false
+        }
+
+        # Create backup of current static config before restoring (if it exists)
+        if ($CreateBackupBeforeRestore) {
+            Write-TraefikLog "Creating backup of current static configuration before restore..." -Level "Info"
+            $backupResult = Backup-StaticConfig -User $User -SshHost $SshHost -Password $Password -Port $Port -RemoteConfigPath $RemoteConfigPath -BackupSuffix "pre_restore"
+            if ($backupResult) {
+                Write-TraefikLog "Current static config backed up to: $backupResult" -Level "Success"
+            }
+        }
+
+        # Deploy the backup content
+        $success = Deploy-StaticConfig -StaticConfigContent $backupContent -User $User -SshHost $SshHost -Password $Password -Port $Port -RemoteConfigPath $RemoteConfigPath -CreateBackup $false
+
+        if ($success) {
+            Write-TraefikLog "Successfully restored static configuration from backup" -Level "Success"
+            return $true
+        } else {
+            Write-TraefikLog "Failed to restore static configuration from backup" -Level "Error"
+            return $false
+        }
+    }
+    catch {
+        Write-TraefikLog "Error during static config restore operation: $($_.Exception.Message)" -Level "Error"
+        return $false
+    }
+}
+
 # --- Backup Management Functions ---
 function Remove-OldBackups {
     [CmdletBinding()]
@@ -266,7 +392,10 @@ function Remove-OldBackups {
 Export-ModuleMember -Function @(
     'Save-ServiceBackup',
     'Get-ServiceBackups',
+    'Get-StaticConfigBackups',
+    'Get-AllBackups',
     'Get-BackupContent',
     'Restore-ServiceFromBackup',
+    'Restore-StaticConfigFromBackup',
     'Remove-OldBackups'
 )

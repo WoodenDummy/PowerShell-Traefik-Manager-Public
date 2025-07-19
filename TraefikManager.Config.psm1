@@ -4,152 +4,6 @@
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
 
-# --- Configuration Initialization ---
-function Initialize-TraefikConfiguration {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$ConfigPath
-    )
-
-    Write-Host "`n=== Traefik Manager Configuration Setup ===" -ForegroundColor Green
-    Write-Host "This wizard will help you configure Traefik Manager for your environment.`n" -ForegroundColor Cyan
-
-    # Get Traefik server details
-    Write-Host "--- Traefik Server Configuration ---" -ForegroundColor Yellow
-    
-    $traefikIp = Get-ValidatedInput -Prompt "Enter the IP address of your Traefik server" -ValidationFunction { param($ip) Test-IPAddress $ip } -ErrorMessage "Invalid IP address format (e.g., 192.168.1.100)"
-    
-    $sshUser = Get-ValidatedInput -Prompt "Enter the SSH username for the Traefik server" -ValidationFunction { param($user) $user -and $user.Trim().Length -gt 0 } -ErrorMessage "Username cannot be empty"
-    
-    $sshPort = Get-ValidatedInput -Prompt "Enter the SSH port (default: 22)" -ValidationFunction { param($port) if ([string]::IsNullOrWhiteSpace($port)) { $true } else { Test-PortNumber $port } } -ErrorMessage "Invalid port number"
-    if ([string]::IsNullOrWhiteSpace($sshPort)) { $sshPort = "22" }
-    
-    $configDir = Read-Host -Prompt "Enter the remote Traefik configuration directory (default: /etc/traefik/conf.d)"
-    if ([string]::IsNullOrWhiteSpace($configDir)) { $configDir = "/etc/traefik/conf.d" }
-
-    # Get domain configuration
-    Write-Host "`n--- Domain Configuration ---" -ForegroundColor Yellow
-    Write-Host "Configure the domains that will be used for your services." -ForegroundColor Cyan
-    
-    $domains = @{}
-    $domainIndex = 1
-    
-    do {
-        $domain = Read-Host -Prompt "Enter domain $domainIndex (e.g., example.com)"
-        if ($domain -and $domain.Trim()) {
-            $domains[$domainIndex.ToString()] = $domain.Trim()
-            $domainIndex++
-        }
-        
-        if ($domainIndex -eq 2) {
-            $addMore = Get-YesNoInput -Prompt "Add another domain?" -DefaultToNo $true
-        } elseif ($domainIndex -gt 2) {
-            $addMore = Get-YesNoInput -Prompt "Add another domain?" -DefaultToNo $true
-        } else {
-            $addMore = $true
-        }
-    } while ($addMore -and $domainIndex -le 10)
-
-    if ($domains.Count -eq 0) {
-        Write-Host "No domains configured. Adding a default placeholder." -ForegroundColor Yellow
-        $domains["1"] = "example.com"
-    }
-
-    # Get editor preference
-    Write-Host "`n--- Editor Configuration ---" -ForegroundColor Yellow
-    Write-Host "Choose your preferred text editor for editing service configurations:" -ForegroundColor Cyan
-    Write-Host "1. Notepad (Windows default)" -ForegroundColor White
-    Write-Host "2. Visual Studio Code" -ForegroundColor White
-    Write-Host "3. Notepad++" -ForegroundColor White
-    Write-Host "4. Custom editor" -ForegroundColor White
-    
-    do {
-        $editorChoice = Read-Host -Prompt "Enter your choice (1-4)"
-        $editor = switch ($editorChoice) {
-            "1" { "notepad.exe" }
-            "2" { "code.exe" }
-            "3" { "notepad++.exe" }
-            "4" { 
-                $customEditor = Read-Host -Prompt "Enter the full path or command for your editor"
-                if ($customEditor -and $customEditor.Trim()) { $customEditor.Trim() } else { "notepad.exe" }
-            }
-            default { $null }
-        }
-    } while (-not $editor)
-
-    # Get backup preferences
-    Write-Host "`n--- Backup Configuration ---" -ForegroundColor Yellow
-    $backupEnabled = Get-YesNoInput -Prompt "Enable automatic backups when editing/removing services?" -DefaultToNo $false
-
-    # Get advanced settings
-    Write-Host "`n--- Advanced Settings ---" -ForegroundColor Yellow
-    $showAdvanced = Get-YesNoInput -Prompt "Configure advanced connection settings?" -DefaultToNo $true
-    
-    $maxRetries = 3
-    $retryDelay = 2
-    $timeout = 30
-    
-    if ($showAdvanced) {
-        $maxRetriesInput = Read-Host -Prompt "Maximum connection retries (default: 3)"
-        if ($maxRetriesInput -and $maxRetriesInput -match "^\d+$") { $maxRetries = [int]$maxRetriesInput }
-        
-        $retryDelayInput = Read-Host -Prompt "Retry delay in seconds (default: 2)"
-        if ($retryDelayInput -and $retryDelayInput -match "^\d+$") { $retryDelay = [int]$retryDelayInput }
-        
-        $timeoutInput = Read-Host -Prompt "Connection timeout in seconds (default: 30)"
-        if ($timeoutInput -and $timeoutInput -match "^\d+$") { $timeout = [int]$timeoutInput }
-    }
-
-    # Create configuration object
-    $config = [PSCustomObject]@{
-        TraefikLxcIp = $traefikIp
-        TraefikSshUser = $sshUser
-        RemoteConfigDir = $configDir
-        DomainOptions = [PSCustomObject]$domains
-        ConnectionSettings = [PSCustomObject]@{
-            MaxRetries = $maxRetries
-            RetryDelaySeconds = $retryDelay
-            TimeoutSeconds = $timeout
-            SSHPort = [int]$sshPort
-        }
-        LogLevel = "Info"
-        Editor = $editor
-        BackupEnabled = $backupEnabled
-        BackupDirectory = "backups"
-        ConfigVersion = "1.0"
-        CreatedDate = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-    }
-
-    # Show configuration summary
-    Write-Host "`n--- Configuration Summary ---" -ForegroundColor Green
-    Write-Host "Traefik Server: $($config.TraefikSshUser)@$($config.TraefikLxcIp):$($config.ConnectionSettings.SSHPort)" -ForegroundColor Cyan
-    Write-Host "Configuration Directory: $($config.RemoteConfigDir)" -ForegroundColor Cyan
-    Write-Host "Domains: $($domains.Values -join ', ')" -ForegroundColor Cyan
-    Write-Host "Editor: $($config.Editor)" -ForegroundColor Cyan
-    Write-Host "Backups Enabled: $($config.BackupEnabled)" -ForegroundColor Cyan
-    Write-Host "----------------------------" -ForegroundColor Green
-
-    $confirm = Get-YesNoInput -Prompt "Save this configuration?" -DefaultToNo $false
-    if (-not $confirm) {
-        Write-Host "Configuration cancelled." -ForegroundColor Yellow
-        return $null
-    }
-
-    # Save configuration
-    try {
-        $config | ConvertTo-Json -Depth 10 | Set-Content $ConfigPath -ErrorAction Stop
-        Write-Host "`nConfiguration saved successfully to: $ConfigPath" -ForegroundColor Green
-        Write-TraefikLog "Configuration initialized and saved to: $ConfigPath" -Level "Success"
-        return $config
-    }
-    catch {
-        Write-Host "Failed to save configuration: $($_.Exception.Message)" -ForegroundColor Red
-        Write-TraefikLog "Failed to save configuration: $($_.Exception.Message)" -Level "Error"
-        return $null
-    }
-}
-
 # --- YAML Configuration Generation ---
 function New-TraefikServiceYaml {
     [CmdletBinding()]
@@ -168,6 +22,9 @@ function New-TraefikServiceYaml {
         
         [Parameter(Mandatory = $false)]
         [bool]$UseHttps = $false,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$CertResolver = "letsencrypt",
         
         [Parameter(Mandatory = $false)]
         [string[]]$Middlewares = @(),
@@ -192,7 +49,7 @@ function New-TraefikServiceYaml {
     $yamlContent += "      rule: `"Host(``$fullDomain``)`"`n"
     $yamlContent += "      service: `"$ServiceName-service`"`n"
     $yamlContent += "      tls:`n"
-    $yamlContent += "        certResolver: `"letsencrypt`"`n"
+    $yamlContent += "        certResolver: `"$CertResolver`"`n"
 
     # Add middlewares if any are specified
     if ($allMiddlewares.Count -gt 0) {
@@ -218,7 +75,7 @@ function New-TraefikServiceYaml {
         $yamlContent += "      insecureSkipVerify: true`n"
     }
 
-    Write-TraefikLog "Generated YAML configuration for service: $ServiceName" -Level "Debug"
+    Write-TraefikLog "Generated YAML configuration for service: $ServiceName using cert resolver: $CertResolver" -Level "Debug"
     return $yamlContent
 }
 
@@ -458,7 +315,6 @@ function Test-BasicYamlSyntax {
 
 # Export functions
 Export-ModuleMember -Function @(
-    'Initialize-TraefikConfiguration',
     'New-TraefikServiceYaml',
     'Deploy-ServiceConfig',
     'Edit-ServiceConfig',

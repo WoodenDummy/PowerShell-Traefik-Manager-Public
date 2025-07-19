@@ -79,30 +79,27 @@ function Get-TraefikConfiguration {
             $configContent = Get-Content $ConfigPath -Raw -ErrorAction Stop
             $config = $configContent | ConvertFrom-Json -ErrorAction Stop
             
-            # Validate required properties
-            $requiredProperties = @('TraefikLxcIp', 'TraefikSshUser', 'RemoteConfigDir')
-            $missingProperties = @()
+            # Validate configuration
+            $validationResult = Test-ConfigurationFile -Config $config
             
-            foreach ($prop in $requiredProperties) {
-                if (-not $config.PSObject.Properties.Name.Contains($prop)) {
-                    $missingProperties += $prop
+            if (-not $validationResult.Valid) {
+                Write-TraefikLog "Configuration file validation failed: $($validationResult.Issues -join ', ')" -Level "Warning"
+                Write-Host "Configuration file exists but has issues:" -ForegroundColor Yellow
+                foreach ($issue in $validationResult.Issues) {
+                    Write-Host "  • $issue" -ForegroundColor Red
                 }
-            }
-            
-            if ($missingProperties.Count -gt 0) {
-                Write-TraefikLog "Configuration file is missing required properties: $($missingProperties -join ', ')" -Level "Warning"
-                Write-Host "Configuration file exists but is incomplete or outdated." -ForegroundColor Yellow
+                
                 $recreate = Get-YesNoInput -Prompt "Would you like to run the configuration wizard again?" -DefaultToNo $false
                 
                 if ($recreate) {
-                    $newConfig = Initialize-TraefikConfiguration -ConfigPath $ConfigPath
+                    $newConfig = Start-FirstRunWizard -ConfigPath $ConfigPath
                     if ($newConfig) {
                         $script:ModuleConfig = $newConfig
                         return $newConfig
                     }
                 }
                 
-                throw "Configuration file is incomplete and user declined to recreate it."
+                throw "Configuration file has issues and user declined to recreate it."
             }
             
             Write-TraefikLog "Configuration loaded successfully from: $ConfigPath" -Level "Success"
@@ -116,7 +113,7 @@ function Get-TraefikConfiguration {
             $recreate = Get-YesNoInput -Prompt "Would you like to run the configuration wizard to create a new configuration?" -DefaultToNo $false
             
             if ($recreate) {
-                $newConfig = Initialize-TraefikConfiguration -ConfigPath $ConfigPath
+                $newConfig = Start-FirstRunWizard -ConfigPath $ConfigPath
                 if ($newConfig) {
                     $script:ModuleConfig = $newConfig
                     return $newConfig
@@ -129,7 +126,7 @@ function Get-TraefikConfiguration {
     
     # No config file exists - run initialization wizard
     Write-Host "No configuration file found. Running the setup wizard..." -ForegroundColor Yellow
-    $newConfig = Initialize-TraefikConfiguration -ConfigPath $ConfigPath
+    $newConfig = Start-FirstRunWizard -ConfigPath $ConfigPath
     
     if (-not $newConfig) {
         throw "Configuration setup was cancelled or failed."
@@ -137,6 +134,46 @@ function Get-TraefikConfiguration {
     
     $script:ModuleConfig = $newConfig
     return $newConfig
+}
+
+function Test-ConfigurationFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Config
+    )
+    
+    $issues = @()
+    $requiredProperties = @('TraefikLxcIp', 'TraefikSshUser', 'RemoteConfigDir', 'DomainOptions')
+    
+    # Check required properties
+    foreach ($prop in $requiredProperties) {
+        if (-not $Config.PSObject.Properties.Name.Contains($prop)) {
+            $issues += "Missing required property: $prop"
+        }
+    }
+    
+    # Check ConnectionSettings
+    if (-not $Config.PSObject.Properties.Name.Contains('ConnectionSettings')) {
+        $issues += "Missing ConnectionSettings section"
+    } elseif (-not $Config.ConnectionSettings.PSObject.Properties.Name.Contains('SSHPort')) {
+        $issues += "Missing SSH port in ConnectionSettings"
+    }
+    
+    # Check for certificate resolver (new in v1.1)
+    if (-not $Config.PSObject.Properties.Name.Contains('CertificateResolver')) {
+        $issues += "Missing certificate resolver configuration (legacy config detected)"
+    }
+    
+    # Validate IP address format
+    if ($Config.TraefikLxcIp -and -not (Test-IPAddress $Config.TraefikLxcIp)) {
+        $issues += "Invalid IP address format: $($Config.TraefikLxcIp)"
+    }
+    
+    return [PSCustomObject]@{
+        Valid = ($issues.Count -eq 0)
+        Issues = $issues
+    }
 }
 
 # --- Input Validation Functions ---
@@ -308,7 +345,7 @@ function Get-SshPassword {
     # Save to encrypted file
     try {
         $script:SecurePassword | Export-CliXml -Path $script:EncryptedCredentialFile -Force -ErrorAction Stop
-        Write-TraefikLog "Password saved to encrypted file." -Level "Success"
+Write-TraefikLog "Password saved to encrypted file." -Level "Success"
     }
     catch {
         Write-TraefikLog "Failed to save password: $($_.Exception.Message)" -Level "Warning"
@@ -388,7 +425,8 @@ function Remove-TraefikTemporaryFiles {
 # Export functions
 Export-ModuleMember -Function @(
     'Write-TraefikLog',
-    'Get-TraefikConfiguration', 
+    'Get-TraefikConfiguration',
+    'Test-ConfigurationFile',
     'Test-IPAddress',
     'Test-ServiceName', 
     'Test-PortNumber',

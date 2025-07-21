@@ -116,12 +116,12 @@ function Parse-StaticConfiguration {
             APIEnabled = $false
         }
 
-        # Parse YAML content (basic parsing for key information)
+        # Parse YAML content with improved logic
         $lines = $ConfigContent -split "`n"
-        $currentSection = ""
         $inEntryPoints = $false
         $inCertResolvers = $false
         $inProviders = $false
+        $inFileProvider = $false
         
         foreach ($line in $lines) {
             $trimmed = $line.Trim()
@@ -131,75 +131,145 @@ function Parse-StaticConfiguration {
                 continue
             }
             
-            # Detect main sections
-            if ($trimmed -eq "entryPoints:") {
+            # Detect main sections (case insensitive, flexible matching)
+            if ($trimmed -match '^entrypoints?\s*:' -or $trimmed -match '^entryPoints?\s*:') {
                 $inEntryPoints = $true
                 $inCertResolvers = $false
                 $inProviders = $false
+                $inFileProvider = $false
+                Write-TraefikLog "Found entryPoints section" -Level "Debug"
                 continue
             }
-            elseif ($trimmed -eq "certificatesResolvers:") {
+            elseif ($trimmed -match '^certificatesresolvers?\s*:' -or $trimmed -match '^certificateResolvers?\s*:') {
                 $inEntryPoints = $false
                 $inCertResolvers = $true
                 $inProviders = $false
+                $inFileProvider = $false
+                Write-TraefikLog "Found certificatesResolvers section" -Level "Debug"
                 continue
             }
-            elseif ($trimmed -eq "providers:") {
+            elseif ($trimmed -match '^providers?\s*:') {
                 $inEntryPoints = $false
                 $inCertResolvers = $false
                 $inProviders = $true
+                $inFileProvider = $false
+                Write-TraefikLog "Found providers section" -Level "Debug"
                 continue
             }
-            elseif ($trimmed.EndsWith(":") -and -not $trimmed.Contains(" ")) {
-                # New main section
+            elseif ($trimmed -match '^[a-zA-Z][a-zA-Z0-9]*\s*:' -and -not $trimmed.Contains(" ") -and $trimmed -notmatch '^\s') {
+                # New main section that's not indented
                 $inEntryPoints = $false
                 $inCertResolvers = $false
                 $inProviders = $false
+                $inFileProvider = $false
                 continue
             }
             
-            # Parse entry points
-            if ($inEntryPoints -and $trimmed.Contains(":") -and -not $trimmed.StartsWith("-")) {
-                $entryPointName = ($trimmed -split ":")[0].Trim()
-                if ($entryPointName -and -not $entryPointName.Contains(" ")) {
+            # Parse entry points (look for any indented item under entryPoints)
+            if ($inEntryPoints -and $trimmed -match '^\s*([a-zA-Z][a-zA-Z0-9\-_]*)\s*:') {
+                $entryPointName = $matches[1]
+                if ($entryPointName -and $entryPointName -ne "address") {
                     $config.EntryPoints += $entryPointName
+                    Write-TraefikLog "Found entry point: $entryPointName" -Level "Debug"
                 }
             }
             
-            # Parse certificate resolvers
-            if ($inCertResolvers -and $trimmed.Contains(":") -and -not $trimmed.StartsWith("-")) {
-                $resolverName = ($trimmed -split ":")[0].Trim()
-                if ($resolverName -and -not $resolverName.Contains(" ")) {
+            # Parse certificate resolvers (look for any indented item under certificatesResolvers)
+            if ($inCertResolvers -and $trimmed -match '^\s*([a-zA-Z][a-zA-Z0-9\-_]*)\s*:') {
+                $resolverName = $matches[1]
+                if ($resolverName -and $resolverName -ne "acme") {
                     $config.CertResolvers += $resolverName
+                    Write-TraefikLog "Found certificate resolver: $resolverName" -Level "Debug"
                 }
             }
             
             # Parse file provider
             if ($inProviders) {
-                if ($trimmed -eq "file:") {
+                if ($trimmed -match '^\s*file\s*:' -or $trimmed -eq "file:") {
                     $config.FileProviderEnabled = $true
+                    $inFileProvider = $true
+                    Write-TraefikLog "Found file provider enabled" -Level "Debug"
                 }
-                elseif ($config.FileProviderEnabled -and $trimmed.StartsWith("directory:")) {
-                    $directory = ($trimmed -replace "directory:", "").Trim()
-                    $directory = $directory -replace "[`"']", ""  # Remove quotes
-                    $directory = $directory -replace "/$", ""     # Remove trailing slash
+                elseif ($inFileProvider -and $trimmed -match '^\s*directory\s*:\s*["\']?([^"\']+)["\']?') {
+                    $directory = $matches[1].Trim()
+                    $directory = $directory -replace "/$", ""  # Remove trailing slash
                     $config.FileProviderDirectory = $directory
+                    Write-TraefikLog "Found file provider directory: $directory" -Level "Debug"
                 }
             }
             
-            # Check for API
-            if ($trimmed -eq "api:" -or ($trimmed.StartsWith("api:") -and $trimmed.Length -gt 4)) {
+            # Check for API (more flexible)
+            if ($trimmed -match '^api\s*:' -or $trimmed -match '^\s*dashboard\s*:\s*true') {
                 $config.APIEnabled = $true
+                Write-TraefikLog "Found API/dashboard enabled" -Level "Debug"
             }
         }
         
-        Write-TraefikLog "Parsed static config - Entry Points: $($config.EntryPoints.Count), Cert Resolvers: $($config.CertResolvers.Count), File Provider: $($config.FileProviderEnabled)" -Level "Debug"
+        Write-TraefikLog "Parsed static config - Entry Points: $($config.EntryPoints.Count) [$($config.EntryPoints -join ', ')], Cert Resolvers: $($config.CertResolvers.Count) [$($config.CertResolvers -join ', ')], File Provider: $($config.FileProviderEnabled)" -Level "Info"
         return $config
     }
     catch {
         Write-TraefikLog "Error parsing static configuration: $($_.Exception.Message)" -Level "Error"
         throw
     }
+}
+
+# --- Debug Function (Optional - for troubleshooting) ---
+function Debug-StaticConfiguration {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigContent
+    )
+
+    Write-Host "`n=== DEBUGGING STATIC CONFIGURATION ===" -ForegroundColor Yellow
+    
+    $lines = $ConfigContent -split "`n"
+    $lineNumber = 1
+    
+    foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+        
+        # Skip empty lines but show comments
+        if ([string]::IsNullOrEmpty($trimmed)) {
+            $lineNumber++
+            continue
+        }
+        
+        $color = "White"
+        $annotation = ""
+        
+        # Highlight important sections
+        if ($trimmed -match '^entrypoints?\s*:' -or $trimmed -match '^entryPoints?\s*:') {
+            $color = "Green"
+            $annotation = " ← ENTRY POINTS SECTION"
+        }
+        elseif ($trimmed -match '^certificatesresolvers?\s*:' -or $trimmed -match '^certificateResolvers?\s*:') {
+            $color = "Green"
+            $annotation = " ← CERTIFICATE RESOLVERS SECTION"
+        }
+        elseif ($trimmed -match '^providers?\s*:') {
+            $color = "Green"
+            $annotation = " ← PROVIDERS SECTION"
+        }
+        elseif ($trimmed -match '^\s*file\s*:') {
+            $color = "Cyan"
+            $annotation = " ← FILE PROVIDER"
+        }
+        elseif ($trimmed -match '^\s*directory\s*:') {
+            $color = "Cyan"
+            $annotation = " ← DIRECTORY SETTING"
+        }
+        elseif ($trimmed -match '^\s*([a-zA-Z][a-zA-Z0-9\-_]*)\s*:' -and $line -match '^\s+') {
+            $color = "Yellow"
+            $annotation = " ← POTENTIAL ENTRY POINT OR RESOLVER"
+        }
+        
+        Write-Host ("{0:D3}: {1}{2}" -f $lineNumber, $line, $annotation) -ForegroundColor $color
+        $lineNumber++
+    }
+    
+    Write-Host "`n=== END DEBUG ===" -ForegroundColor Yellow
 }
 
 # --- Configuration Synchronization ---
@@ -281,12 +351,12 @@ function Show-ConfigMismatchWarning {
     )
 
     if ($CompatibilityResult.Compatible) {
-        Write-Host "✓ Configuration compatibility check passed!" -ForegroundColor Green
+        Write-Host "Configuration compatibility check passed!" -ForegroundColor Green
         return
     }
 
-    Write-Host "`n⚠️  Configuration Compatibility Issues Found" -ForegroundColor Yellow
-    Write-Host "=" * 50 -ForegroundColor Yellow
+    Write-Host "`nConfiguration Compatibility Issues Found" -ForegroundColor Yellow
+    Write-Host ("=" * 50) -ForegroundColor Yellow
     
     Write-Host "`nIssues:" -ForegroundColor Red
     foreach ($issue in $CompatibilityResult.Issues) {
@@ -298,7 +368,7 @@ function Show-ConfigMismatchWarning {
         Write-Host "  → $recommendation" -ForegroundColor Cyan
     }
     
-    Write-Host "`n" + "=" * 50 -ForegroundColor Yellow
+    Write-Host "`n" + ("=" * 50) -ForegroundColor Yellow
     Write-Host "These issues may cause service deployments to fail." -ForegroundColor Yellow
     Write-Host "Please resolve them before adding services." -ForegroundColor Yellow
 }
@@ -324,7 +394,7 @@ function Invoke-ConfigurationSync {
         $compatResult = Test-ConfigCompatibility -Config $Config -User $Config.TraefikSshUser -SshHost $Config.TraefikLxcIp -Password $Password -Port $Config.ConnectionSettings.SSHPort
         
         if ($compatResult.Compatible) {
-            Write-Host "✓ Configurations are compatible!" -ForegroundColor Green
+            Write-Host "Configurations are compatible!" -ForegroundColor Green
             return $true
         }
         
@@ -340,12 +410,12 @@ function Invoke-ConfigurationSync {
                 $syncResult = Sync-DynamicConfigTemplate -ConfigPath $ConfigPath -StaticConfigInfo $compatResult.StaticConfig
                 
                 if ($syncResult.Updated) {
-                    Write-Host "✓ Configuration synchronized successfully!" -ForegroundColor Green
+                    Write-Host "Configuration synchronized successfully!" -ForegroundColor Green
                     Write-Host "Changes made:" -ForegroundColor Green
                     foreach ($change in $syncResult.Changes) {
                         Write-Host "  • $change" -ForegroundColor Green
                     }
-                    Write-Host "`n💡 Please restart this tool to load the updated configuration." -ForegroundColor Cyan
+                    Write-Host "`nPlease restart this tool to load the updated configuration." -ForegroundColor Cyan
                     return $true
                 }
                 else {
@@ -368,6 +438,7 @@ function Invoke-ConfigurationSync {
 Export-ModuleMember -Function @(
     'Test-ConfigCompatibility',
     'Parse-StaticConfiguration',
+    'Debug-StaticConfiguration',
     'Sync-DynamicConfigTemplate',
     'Show-ConfigMismatchWarning',
     'Invoke-ConfigurationSync'

@@ -22,6 +22,7 @@ try {
         "TraefikManager.Backup.psm1",
         "TraefikManager.UI.psm1",
         "TraefikManager.StaticConfig.psm1",
+		"TraefikManager.Templates.psm1",
         "TraefikManager.Wizard.psm1",
         "TraefikManager.ConfigSync.psm1"
     )
@@ -80,8 +81,8 @@ function Invoke-AddService {
         
         $existingServices = Get-TraefikServices -User $script:Config.TraefikSshUser -SshHost $script:Config.TraefikLxcIp -Password $password -RemoteConfigDir $script:Config.RemoteConfigDir -Port $script:Config.ConnectionSettings.SSHPort
         
-        # Safe check for existing services - handle case where services might be null or empty
-        if ($null -ne $existingServices -and (Test-ServiceExists -ServiceName $serviceName -ExistingServices $existingServices)) {
+        # Safe check for existing services
+        if (Test-ServiceExists -ServiceName $serviceName -ExistingServices $existingServices) {
             Show-ErrorMessage "Service '$serviceName' already exists!"
             return
         }
@@ -644,6 +645,7 @@ function Start-TraefikManager {
                    "10" { Invoke-TestCompatibility }
                    "11" { Invoke-ShowConfiguration }
                    "12" { Invoke-TestConnection }
+				   "13" { Invoke-TemplateManager }
                    "q" { 
                        Write-TraefikLog "User requested to quit the application." -Level "Info"
                        $exitRequested = $true
@@ -691,4 +693,319 @@ finally {
    # Always pause at the end so window doesn't close immediately
    Write-Host "`nScript execution completed." -ForegroundColor Green
    Read-Host "Press Enter to close this window..."
+}
+
+# Add these functions to TraefikManager-Modular.ps1
+
+function Invoke-TemplateManager {
+    try {
+        Write-TraefikLog "Starting template manager..." -Level "Info"
+        
+        $exitRequested = $false
+        while (-not $exitRequested) {
+            try {
+                Show-TemplateMenu
+                
+                $choice = Read-Host -Prompt "Enter your choice"
+                Write-TraefikLog "User selected template option: $choice" -Level "Debug"
+
+                switch ($choice) {
+                    "1" { Invoke-CreateFromTemplate }
+                    "2" { Invoke-ImportTemplate }
+                    "3" { Invoke-ViewTemplates }
+                    "4" { Invoke-ViewTemplateContent }
+                    "5" { Invoke-DeleteTemplate }
+                    "6" { Invoke-CreateDefaultTemplates }
+                    "b" { 
+                        Write-TraefikLog "User returned to main menu from templates" -Level "Info"
+                        $exitRequested = $true
+                    }
+                    default { 
+                        Write-TraefikLog "Invalid template menu choice: $choice" -Level "Warning"
+                        Show-WarningMessage "Invalid choice. Please try again."
+                        Start-Sleep -Seconds 1
+                    }
+                }
+            }
+            catch {
+                Write-TraefikLog "Error in template menu loop: $($_.Exception.Message)" -Level "Error"
+                Show-ErrorMessage "An error occurred. Please try again." $_.Exception.Message
+                Start-Sleep -Seconds 2
+            }
+        }
+    }
+    catch {
+        Show-ErrorMessage "Error in template manager" $_.Exception.Message
+        Write-TraefikLog "Error in Invoke-TemplateManager: $($_.Exception.Message)" -Level "Error"
+    }
+}
+
+function Invoke-CreateFromTemplate {
+    try {
+        Write-TraefikLog "Starting create from template workflow..." -Level "Info"
+        Show-InfoMessage "--- Create Service from Template ---"
+        
+        # Get available templates
+        $templates = @(Get-ServiceTemplates)
+        if ($templates.Count -eq 0) {
+            Show-WarningMessage "No templates available."
+            Show-InfoMessage "Import templates or create default ones first."
+            Wait-ForContinue
+            return
+        }
+        
+        # Show template list
+        Show-TemplateList -Templates $templates -Title "Available Service Templates"
+        
+        # Get template selection
+        $selectedTemplate = $null
+        do {
+            $selectedTemplate = Get-TemplateSelection -Prompt "Select template number (or 'q' to cancel)" -Templates $templates
+            if ($selectedTemplate -eq $null) {
+                Show-InfoMessage "Template selection cancelled."
+                return
+            }
+            if ($selectedTemplate -eq "INVALID") {
+                continue
+            }
+            break
+        } while ($true)
+        
+        # Show template details
+        Show-InfoMessage "`nTemplate: $($selectedTemplate.Name)"
+        Show-InfoMessage "Description: $($selectedTemplate.Description)"
+        Show-InfoMessage "Variables needed: $($selectedTemplate.Variables -join ', ')"
+        
+        # Get variable values
+        Write-Host "`n--- Enter Template Variables ---" -ForegroundColor Yellow
+        $variables = Get-TemplateVariables -Template $selectedTemplate
+        
+        # Check for service name conflicts
+        if ($variables.ContainsKey("ServiceName")) {
+            $password = Get-SshPassword -User $script:Config.TraefikSshUser -SshHost $script:Config.TraefikLxcIp
+            if (-not $password) { return }
+            
+            $existingServices = Get-TraefikServices -User $script:Config.TraefikSshUser -SshHost $script:Config.TraefikLxcIp -Password $password -RemoteConfigDir $script:Config.RemoteConfigDir -Port $script:Config.ConnectionSettings.SSHPort
+            
+            if (Test-ServiceExists -ServiceName $variables["ServiceName"] -ExistingServices $existingServices) {
+                Show-ErrorMessage "Service '$($variables["ServiceName"])' already exists!"
+                return
+            }
+        }
+        
+        # Process template
+        $processedContent = New-ServiceFromTemplate -Template $selectedTemplate -Variables $variables
+        if (-not $processedContent) {
+            Show-ErrorMessage "Failed to process template"
+            return
+        }
+        
+        # Show preview
+        Show-TemplatePreview -Template $selectedTemplate -ProcessedContent $processedContent
+        
+        # Confirm deployment
+        $deploy = Get-YesNoInput -Prompt "Deploy this service configuration?"
+        if (-not $deploy) {
+            Show-InfoMessage "Deployment cancelled."
+            return
+        }
+        
+        # Deploy the service
+        if (-not $password) {
+            $password = Get-SshPassword -User $script:Config.TraefikSshUser -SshHost $script:Config.TraefikLxcIp
+            if (-not $password) { return }
+        }
+        
+        $serviceName = if ($variables.ContainsKey("ServiceName")) { $variables["ServiceName"] } else { "template-service-$(Get-Random)" }
+        $success = Deploy-ServiceConfig -ServiceName $serviceName -YamlContent $processedContent -User $script:Config.TraefikSshUser -SshHost $script:Config.TraefikLxcIp -Password $password -RemoteConfigDir $script:Config.RemoteConfigDir -Port $script:Config.ConnectionSettings.SSHPort -CreateBackup $script:Config.BackupEnabled
+
+        Show-OperationResult -Success $success -Operation "Template-based service deployment" -ServiceName $serviceName -AdditionalMessage "Traefik will automatically detect the new configuration."
+        
+        Wait-ForContinue
+    }
+    catch {
+        Show-ErrorMessage "Error creating service from template" $_.Exception.Message
+        Write-TraefikLog "Error in Invoke-CreateFromTemplate: $($_.Exception.Message)" -Level "Error"
+        Wait-ForContinue
+    }
+}
+
+function Invoke-ImportTemplate {
+    try {
+        Write-TraefikLog "Starting import template workflow..." -Level "Info"
+        Show-InfoMessage "--- Import Service Template ---"
+        
+        # Get template file path
+        $templatePath = Read-Host -Prompt "Enter the full path to the template file (.yml)"
+        
+        if ([string]::IsNullOrWhiteSpace($templatePath)) {
+            Show-InfoMessage "Import cancelled."
+            return
+        }
+        
+        if (-not (Test-Path $templatePath)) {
+            Show-ErrorMessage "File not found: $templatePath"
+            return
+        }
+        
+        # Get template name
+        $defaultName = [System.IO.Path]::GetFileNameWithoutExtension($templatePath)
+        $templateName = Read-Host -Prompt "Enter template name (default: $defaultName)"
+        
+        if ([string]::IsNullOrWhiteSpace($templateName)) {
+            $templateName = $defaultName
+        }
+        
+        # Import template
+        $success = Import-ServiceTemplate -SourcePath $templatePath -TemplateName $templateName
+        
+        if ($success) {
+            Show-SuccessMessage "Template '$templateName' imported successfully!"
+        } else {
+            Show-ErrorMessage "Failed to import template"
+        }
+        
+        Wait-ForContinue
+    }
+    catch {
+        Show-ErrorMessage "Error importing template" $_.Exception.Message
+        Write-TraefikLog "Error in Invoke-ImportTemplate: $($_.Exception.Message)" -Level "Error"
+        Wait-ForContinue
+    }
+}
+
+function Invoke-ViewTemplates {
+    try {
+        Write-TraefikLog "Viewing templates..." -Level "Info"
+        
+        $templates = @(Get-ServiceTemplates)
+        Show-TemplateList -Templates $templates -Title "All Available Templates"
+        
+        if ($templates.Count -gt 0) {
+            Write-Host "`nTemplate Details:" -ForegroundColor Cyan
+            foreach ($template in $templates) {
+                Write-Host "• $($template.Name): $($template.Description)" -ForegroundColor White
+                if ($template.Variables.Count -gt 0) {
+                    Write-Host "  Variables: $($template.Variables -join ', ')" -ForegroundColor Gray
+                }
+            }
+        }
+        
+        Wait-ForContinue
+    }
+    catch {
+        Show-ErrorMessage "Error viewing templates" $_.Exception.Message
+        Write-TraefikLog "Error in Invoke-ViewTemplates: $($_.Exception.Message)" -Level "Error"
+        Wait-ForContinue
+    }
+}
+
+function Invoke-ViewTemplateContent {
+    try {
+        Write-TraefikLog "Starting view template content workflow..." -Level "Info"
+        Show-InfoMessage "--- View Template Content ---"
+        
+        $templates = @(Get-ServiceTemplates)
+        if ($templates.Count -eq 0) {
+            Show-WarningMessage "No templates available."
+            Wait-ForContinue
+            return
+        }
+        
+        Show-TemplateList -Templates $templates -Title "Templates Available to View"
+        
+        $selectedTemplate = $null
+        do {
+            $selectedTemplate = Get-TemplateSelection -Prompt "Select template to view (or 'q' to cancel)" -Templates $templates
+            if ($selectedTemplate -eq $null) {
+                Show-InfoMessage "View cancelled."
+                return
+            }
+            if ($selectedTemplate -eq "INVALID") {
+                continue
+            }
+            break
+        } while ($true)
+        
+        Show-TemplateContent -Template $selectedTemplate
+        Wait-ForContinue
+    }
+    catch {
+        Show-ErrorMessage "Error viewing template content" $_.Exception.Message
+        Write-TraefikLog "Error in Invoke-ViewTemplateContent: $($_.Exception.Message)" -Level "Error"
+        Wait-ForContinue
+    }
+}
+
+function Invoke-DeleteTemplate {
+    try {
+        Write-TraefikLog "Starting delete template workflow..." -Level "Info"
+        Show-InfoMessage "--- Delete Template ---"
+        
+        $templates = @(Get-ServiceTemplates)
+        if ($templates.Count -eq 0) {
+            Show-WarningMessage "No templates available to delete."
+            Wait-ForContinue
+            return
+        }
+        
+        Show-TemplateList -Templates $templates -Title "Templates Available for Deletion"
+        
+        $selectedTemplate = $null
+        do {
+            $selectedTemplate = Get-TemplateSelection -Prompt "Select template to delete (or 'q' to cancel)" -Templates $templates
+            if ($selectedTemplate -eq $null) {
+                Show-InfoMessage "Delete cancelled."
+                return
+            }
+            if ($selectedTemplate -eq "INVALID") {
+                continue
+            }
+            break
+        } while ($true)
+        
+        $success = Remove-ServiceTemplate -TemplateName $selectedTemplate.Name
+        
+        if ($success) {
+            Show-SuccessMessage "Template '$($selectedTemplate.Name)' deleted successfully!"
+        } else {
+            Show-ErrorMessage "Failed to delete template"
+        }
+        
+        Wait-ForContinue
+    }
+    catch {
+        Show-ErrorMessage "Error deleting template" $_.Exception.Message
+        Write-TraefikLog "Error in Invoke-DeleteTemplate: $($_.Exception.Message)" -Level "Error"
+        Wait-ForContinue
+    }
+}
+
+function Invoke-CreateDefaultTemplates {
+    try {
+        Write-TraefikLog "Creating default templates..." -Level "Info"
+        Show-InfoMessage "--- Create Default Templates ---"
+        
+        Show-InfoMessage "This will create default templates for common services:"
+        Show-InfoMessage "• NextCloud (file sharing)"
+        Show-InfoMessage "• Jellyfin (media server)"
+        Show-InfoMessage "• Home Assistant (smart home)"
+        
+        $create = Get-YesNoInput -Prompt "Create default templates?" -DefaultToNo $false
+        
+        if ($create) {
+            New-DefaultTemplates
+            Show-SuccessMessage "Default templates created successfully!"
+            Show-InfoMessage "You can now use these templates to quickly deploy common services."
+        } else {
+            Show-InfoMessage "Default template creation cancelled."
+        }
+        
+        Wait-ForContinue
+    }
+    catch {
+        Show-ErrorMessage "Error creating default templates" $_.Exception.Message
+        Write-TraefikLog "Error in Invoke-CreateDefaultTemplates: $($_.Exception.Message)" -Level "Error"
+        Wait-ForContinue
+    }
 }

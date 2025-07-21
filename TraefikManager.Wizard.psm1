@@ -175,10 +175,10 @@ function Get-DNSProviderConfiguration {
         $isValid = Test-DNSCredentials -Provider "duckdns" -Token $token.Trim() -Domain $DomainInfo.Subdomain
         
         if ($isValid) {
-            Write-Host "✓ Duck DNS credentials validated successfully!" -ForegroundColor Green
+            Write-Host "Duck DNS credentials validated successfully!" -ForegroundColor Green
         }
         else {
-            Write-Host "❌ Duck DNS credential validation failed. Please check your token and subdomain." -ForegroundColor Red
+            Write-Host "Duck DNS credential validation failed. Please check your token and subdomain." -ForegroundColor Red
             throw "Invalid Duck DNS credentials"
         }
         
@@ -206,10 +206,10 @@ function Get-DNSProviderConfiguration {
             $isValid = Test-DNSCredentials -Provider "cloudflare" -Token $token.Trim()
             
             if ($isValid) {
-                Write-Host "✓ Cloudflare credentials validated successfully!" -ForegroundColor Green
+                Write-Host "Cloudflare credentials validated successfully!" -ForegroundColor Green
             }
             else {
-                Write-Host "❌ Cloudflare credential validation failed. Please check your API token permissions." -ForegroundColor Red
+                Write-Host "Cloudflare credential validation failed. Please check your API token permissions." -ForegroundColor Red
                 throw "Invalid Cloudflare credentials"
             }
             
@@ -492,9 +492,9 @@ function Deploy-GeneratedStaticConfig {
         $success = Deploy-StaticConfig -StaticConfigContent $staticContent -User $ServerConfig.TraefikSshUser -SshHost $ServerConfig.TraefikLxcIp -Password $password -Port $ServerConfig.SSHPort
 
         if ($success) {
-            Write-Host "✓ Static configuration uploaded successfully!" -ForegroundColor Green
+            Write-Host "Static configuration uploaded successfully!" -ForegroundColor Green
         } else {
-            Write-Host "❌ Failed to upload static configuration." -ForegroundColor Red
+            Write-Host "Failed to upload static configuration." -ForegroundColor Red
         }
     }
     catch {
@@ -507,8 +507,8 @@ function Deploy-GeneratedStaticConfig {
 function Show-DuckDNSSetupGuidance {
     Write-Host "`n--- Duck DNS Setup Guide ---" -ForegroundColor Yellow
     Write-Host "1. Go to https://www.duckdns.org" -ForegroundColor White
-    Write-Host "2. Sign in with your preferred account (Google, GitHub, etc.)" -ForegroundColor White
-    Write-Host "3. Create a subdomain (e.g., 'mytraefik' → mytraefik.duckdns.org)" -ForegroundColor White
+    Write-Host "2. Sign in with your preferred account (Google, etc.)" -ForegroundColor White
+    Write-Host "3. Create a subdomain (e.g., 'mytraefik' becomes mytraefik.duckdns.org)" -ForegroundColor White
     Write-Host "4. Copy your Duck DNS token from the dashboard" -ForegroundColor White
     Write-Host ""
 }
@@ -519,7 +519,7 @@ function Show-CloudflareSetupGuidance {
     Write-Host "1. Create a Cloudflare account at https://cloudflare.com" -ForegroundColor White
     Write-Host "2. Add your domain to Cloudflare" -ForegroundColor White
     Write-Host "3. Update your domain's nameservers to Cloudflare's" -ForegroundColor White
-    Write-Host "4. Go to My Profile → API Tokens → Create Token" -ForegroundColor White
+    Write-Host "4. Go to My Profile -> API Tokens -> Create Token" -ForegroundColor White
     Write-Host "5. Use 'Custom token' with Zone:Zone:Read, Zone:DNS:Edit permissions" -ForegroundColor White
     Write-Host ""
 }
@@ -534,22 +534,22 @@ function Show-SetupCompletionMessage {
     Write-Host "`n--- Setup Complete ---" -ForegroundColor Green
     
     if ($StaticConfigGenerated) {
-        Write-Host "✓ Static configuration generated and uploaded" -ForegroundColor Green
-        Write-Host "✓ Dynamic configuration template ready" -ForegroundColor Green
-        Write-Host "✓ SSL certificates will be automatically generated" -ForegroundColor Green
+        Write-Host "Static configuration generated and uploaded" -ForegroundColor Green
+        Write-Host "Dynamic configuration template ready" -ForegroundColor Green
+        Write-Host "SSL certificates will be automatically generated" -ForegroundColor Green
         Write-Host "`nNext steps:" -ForegroundColor Yellow
         Write-Host "1. Restart Traefik: sudo systemctl restart traefik" -ForegroundColor White
         Write-Host "2. Use this tool to add your first service" -ForegroundColor White
         Write-Host "3. Services will be available at: servicename.yourdomain.com" -ForegroundColor White
     } else {
-        Write-Host "✓ Dynamic configuration template ready" -ForegroundColor Green
-        Write-Host "✓ Tool configured for your existing Traefik setup" -ForegroundColor Green
+        Write-Host "Dynamic configuration template ready" -ForegroundColor Green
+        Write-Host "Tool configured for your existing Traefik setup" -ForegroundColor Green
         Write-Host "`nNext steps:" -ForegroundColor Yellow
         Write-Host "1. Use this tool to add your first service" -ForegroundColor White
         Write-Host "2. Ensure your static configuration is compatible" -ForegroundColor White
     }
     
-    Write-Host "`n💡 Tip: Use 'Test Connection' to verify your setup before adding services." -ForegroundColor Cyan
+    Write-Host "`nTip: Use 'Test Connection' to verify your setup before adding services." -ForegroundColor Cyan
 }
 
 # Export functions

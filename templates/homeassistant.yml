@@ -1,0 +1,29 @@
+﻿# Description: Home Assistant home automation
+# Category: Smart Home
+# Variables: ServiceName, ServiceIP, ServicePort, Domain, CertResolver
+
+http:
+  routers:
+    {{ServiceName}}-router:
+      entryPoints:
+        - "websecure"
+      rule: "Host(`{{ServiceName}}.{{Domain}}`)"
+      service: "{{ServiceName}}-service"
+      middlewares:
+        - "{{ServiceName}}-headers"
+      tls:
+        certResolver: "{{CertResolver}}"
+  
+  services:
+    {{ServiceName}}-service:
+      loadBalancer:
+        servers:
+          - url: "http://{{ServiceIP}}:{{ServicePort}}"
+  
+  middlewares:
+    {{ServiceName}}-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-For: ""
+          X-Forwarded-Proto: "https"
+          X-Forwarded-Port: "443"

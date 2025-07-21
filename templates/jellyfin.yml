@@ -1,0 +1,19 @@
+﻿# Description: Jellyfin media server
+# Category: Media
+# Variables: ServiceName, ServiceIP, ServicePort, Domain, CertResolver
+
+http:
+  routers:
+    {{ServiceName}}-router:
+      entryPoints:
+        - "websecure"
+      rule: "Host(`{{ServiceName}}.{{Domain}}`)"
+      service: "{{ServiceName}}-service"
+      tls:
+        certResolver: "{{CertResolver}}"
+  
+  services:
+    {{ServiceName}}-service:
+      loadBalancer:
+        servers:
+          - url: "http://{{ServiceIP}}:{{ServicePort}}"

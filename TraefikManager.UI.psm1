@@ -19,6 +19,7 @@ function Show-MainMenu {
     Write-Host "10. Test Configuration Compatibility" -ForegroundColor Yellow
     Write-Host "11. Show Configuration" -ForegroundColor Yellow
     Write-Host "12. Test Connection" -ForegroundColor Yellow
+	Write-Host "13. Template Manager" -ForegroundColor Yellow
     Write-Host "q. Quit" -ForegroundColor Red
     Write-Host "===============================`n" -ForegroundColor Green
 }
@@ -533,4 +534,8 @@ Export-ModuleMember -Function @(
    'Show-InfoMessage',
    'Show-SuccessMessage',
    'Wait-ForContinue'
+   'Show-TemplateMenu',
+   'Show-TemplateList',
+   'Get-TemplateSelection',
+   'Show-TemplatePreview'
 )

@@ -169,15 +169,34 @@ function Test-ServiceExists {
         [string]$ServiceName,
         
         [Parameter(Mandatory = $true)]
+        [AllowNull()]
         [hashtable]$ExistingServices
     )
 
     # Safely check if service exists without relying on Count property
     if ($null -eq $ExistingServices) {
+        Write-TraefikLog "ExistingServices is null" -Level "Debug"
         return $false
     }
     
-    return $ExistingServices.ContainsKey($ServiceName)
+    # Check if the hashtable has any keys at all
+    try {
+        $hasKeys = $ExistingServices.Keys.Count -gt 0
+        if (-not $hasKeys) {
+            Write-TraefikLog "ExistingServices hashtable has no keys" -Level "Debug"
+            return $false
+        }
+    }
+    catch {
+        Write-TraefikLog "Error checking ExistingServices keys: $($_.Exception.Message)" -Level "Debug"
+        return $false
+    }
+    
+    # Check if the specific service name exists as a key
+    $serviceExists = $ExistingServices.ContainsKey($ServiceName)
+    Write-TraefikLog "Service '$ServiceName' exists check: $serviceExists" -Level "Debug"
+    
+    return $serviceExists
 }
 
 # Export functions
